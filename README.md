@@ -57,3 +57,7 @@ I'm planning to add a decent `dumpRegisters` function, based on my C++ code in [
 ## LoRa_Tester.py
 
 This sample app builds a touch-screen menu that allows me to do some basic LoRa distance tests. I'm planning to add at some point a GPS module, so that I can calculate the distance, with the Haversine formula. The app itself works well enough, and can send PINGs, and displays incoming messages withh RSSI and SNR.
+
+### camera_test.py
+
+This small script acquires continuously a 320x240 photo and displays it, while printing the fps in the serial terminal.
