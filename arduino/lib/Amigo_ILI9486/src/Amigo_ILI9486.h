@@ -2,8 +2,7 @@
 #define _AMIGO_ILI9486_H
 
 // Adafruit_GFX driver for the Maix Amigo's 3.5" 480x320 ILI9486 panel.
-// The panel sits on the K210's 8-bit parallel LCD bus (SPI0 in octal mode),
-// driven through the tft_* helpers of the Maixduino core.
+// The panel sits on the K210's 8-bit parallel LCD bus (SPI0 in octal mode).
 
 #include <Arduino.h>
 #include <Adafruit_GFX.h>
@@ -13,11 +12,11 @@
 #define AMIGO_LCD_DCX_PIN   38
 #define AMIGO_LCD_WR_PIN    39
 
-// Peripheral resources used by the driver
+// Peripheral resources used by the driver, the same as MaixPy's
 #define AMIGO_LCD_SS          3   // SPI0 chip select line
-#define AMIGO_LCD_RST_GPIONUM 6   // GPIOHS used for RST
-#define AMIGO_LCD_DCX_GPIONUM 7   // GPIOHS used for D/C
-#define AMIGO_LCD_DMA_CH      3
+#define AMIGO_LCD_RST_GPIONUM 30  // GPIOHS used for RST
+#define AMIGO_LCD_DCX_GPIONUM 31  // GPIOHS used for D/C
+#define AMIGO_LCD_DMA_CH      2
 
 #define AMIGO_LCD_WIDTH     480
 #define AMIGO_LCD_HEIGHT    320
