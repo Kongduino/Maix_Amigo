@@ -236,3 +236,40 @@ void Amigo_ILI9486::drawImage(uint16_t x, uint16_t y, uint16_t w, uint16_t h, ui
     setArea(x, y, x + w - 1, y + h - 1);
     busHalfwords(img, (uint32_t)w * h);
 }
+
+// Adafruit_GFX's classic 5x7 font (a static array, so this is our own copy)
+#include "glcdfont.c"
+
+#define MAX_FAST_TEXT_SIZE 8
+
+size_t Amigo_ILI9486::write(uint8_t c)
+{
+    // Adafruit_GFX draws each dot of a character as its own rectangle, each
+    // one a separate transfer. For opaque text in the classic font, render
+    // the character cell into a buffer and send it in one go instead.
+    uint8_t s = textsize;
+    if (gfxFont || textbgcolor == textcolor || c == '\n' || c == '\r' || s > MAX_FAST_TEXT_SIZE)
+        return Adafruit_GFX::write(c);
+    if (wrap && cursor_x + s * 6 > _width) {
+        cursor_x = 0;
+        cursor_y += s * 8;
+    }
+    int16_t w = 6 * s, h = 8 * s;
+    if (cursor_x < 0 || cursor_y < 0 || cursor_x + w > _width || cursor_y + h > _height)
+        return Adafruit_GFX::write(c);
+
+    static uint16_t cell[6 * MAX_FAST_TEXT_SIZE * 8 * MAX_FAST_TEXT_SIZE];
+    uint8_t glyph = c;
+    if (!_cp437 && glyph >= 176) glyph++;  // same quirk as Adafruit_GFX, 255 wraps to 0
+    for (int16_t py = 0; py < h; py++) {
+        uint8_t bit = 1 << (py / s);
+        for (int16_t px = 0; px < w; px++) {
+            uint8_t col = px / s;
+            bool on = col < 5 && (font[glyph * 5 + col] & bit);
+            cell[py * w + px] = on ? textcolor : textbgcolor;
+        }
+    }
+    drawImage(cursor_x, cursor_y, w, h, cell);
+    cursor_x += w;
+    return 1;
+}

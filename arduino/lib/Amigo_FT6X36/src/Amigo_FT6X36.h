@@ -62,13 +62,22 @@ public:
     uint8_t firmwareVersion(void) { return readReg(FT6X36_REG_FIRM_VER); }
     uint8_t vendorID(void) { return readReg(FT6X36_REG_VENDOR_ID); }
 
-private:
-    TwoWire& _wire;
-    uint8_t  _rotation;
+    // Number of failed I2C reads since begin()
+    uint32_t readErrors(void) { return _readErrors; }
 
+    // Raw register access
     bool    readRegs(uint8_t reg, uint8_t* buf, uint8_t len);
     uint8_t readReg(uint8_t reg);
     bool    writeReg(uint8_t reg, uint8_t value);
+
+private:
+    TwoWire& _wire;
+    uint8_t  _rotation;
+    uint32_t _readErrors;
+    bool     _touching;        // a touch is in progress
+    bool     _skipStale;       // still receiving the stale frame
+    uint8_t  _stalePoint[4];   // its first point record (XH XL YH YL)
+
     void    mapPoint(uint16_t col, uint16_t row, int16_t& x, int16_t& y);
 };
 

@@ -67,6 +67,11 @@ public:
     // Draws a w*h RGB565 image, no clipping: it must fit on screen.
     void drawImage(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t* img);
 
+    // Text with a background color (setTextColor(fg, bg)) in the built-in
+    // font is sent one character at a time instead of one dot at a time.
+    using Adafruit_GFX::write;
+    virtual size_t write(uint8_t c);
+
     // Raw controller access, like MaixPy's lcd.register()
     void writeCommand(uint8_t cmd, const uint8_t* data = nullptr, uint8_t len = 0);
 

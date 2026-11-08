@@ -1,7 +1,7 @@
 #include "Amigo_FT6X36.h"
 
 Amigo_FT6X36::Amigo_FT6X36(TwoWire& wire)
-: _wire(wire), _rotation(0)
+: _wire(wire), _rotation(0), _readErrors(0), _touching(false), _skipStale(false)
 {
 }
 
@@ -24,8 +24,11 @@ bool Amigo_FT6X36::readRegs(uint8_t reg, uint8_t* buf, uint8_t len)
 {
     _wire.beginTransmission((uint8_t)FT6X36_ADDR);
     _wire.write(reg);
-    if (_wire.endTransmission(false) != 0) return false;
-    if (_wire.requestFrom((uint8_t)FT6X36_ADDR, len) != len) return false;
+    if (_wire.endTransmission(false) != 0 ||
+        _wire.requestFrom((uint8_t)FT6X36_ADDR, len) != len) {
+        _readErrors++;
+        return false;
+    }
     for (uint8_t i = 0; i < len; i++) buf[i] = _wire.read();
     return true;
 }
@@ -84,7 +87,26 @@ uint8_t Amigo_FT6X36::getPoints(TouchPoint* points, uint8_t max)
     uint8_t buf[1 + 6 * FT6X36_MAX_POINTS];
     if (!readRegs(FT6X36_REG_TD_STATUS, buf, sizeof(buf))) return 0;
     uint8_t n = buf[0] & 0x0F;
-    if (n > FT6X36_MAX_POINTS) return 0;
+    if (n == 0 || n > FT6X36_MAX_POINTS) {
+        _touching = false;
+        return 0;
+    }
+
+    // At the start of a touch, the chip often reports a stale, frozen frame
+    // (always the same two points, flagged as contact) for up to ~100 ms
+    // before the real one. A genuine new touch starts with a "down" event, so
+    // a touch starting with anything else is held back until its first point
+    // changes.
+    if (!_touching) {
+        _touching = true;
+        _skipStale = (buf[1] >> 6) != FT6X36_EVENT_DOWN;
+        if (_skipStale) memcpy(_stalePoint, &buf[1], sizeof(_stalePoint));
+    }
+    if (_skipStale) {
+        if (memcmp(_stalePoint, &buf[1], sizeof(_stalePoint)) == 0) return 0;
+        _skipStale = false;
+    }
+
     if (n > max) n = max;
     for (uint8_t i = 0; i < n; i++) {
         const uint8_t* p = &buf[1 + 6 * i];

@@ -19,7 +19,7 @@
 // IRQ pin of the SP-LoRa. Also the blue LED. Like sx127x.py, this program
 // polls the IRQ flags register, so it doesn't depend on it.
 #define LORA_DIO0      17
-#define LORA_SPI_FREQ  100000   // as in LoRa_Tester.py
+#define LORA_SPI_FREQ  2000000
 
 // Radio settings from sx127x.py, so both can talk to each other
 #define LORA_CR        5      // coding rate 4/5
@@ -114,7 +114,7 @@ static void drawButton(uint8_t b, bool pressed) {
     for (uint8_t i = 3; i < 6; i++) lcd.drawRect(x + i, y + i, BTN_W - 2 * i, BTN_H - 2 * i, CHECK_COLOR);
   int16_t len = strlen(labels[b]);
   lcd.setTextSize(3);
-  lcd.setTextColor(pressed ? PRESSED_TEXT : COLOR_WHITE);
+  lcd.setTextColor(pressed ? PRESSED_TEXT : COLOR_WHITE, pressed ? PRESSED_COLOR : BG_COLOR);
   lcd.setCursor(x + (BTN_W - len * 18 + 3) / 2, y + (BTN_H - 21) / 2);
   lcd.print(labels[b]);
 }
@@ -122,7 +122,7 @@ static void drawButton(uint8_t b, bool pressed) {
 static void drawCentered(int16_t y, int16_t h, const char* text, uint16_t color) {
   lcd.fillRect(0, y, lcd.width(), h, BG_COLOR);
   lcd.setTextSize(2);
-  lcd.setTextColor(color);
+  lcd.setTextColor(color, BG_COLOR);
   lcd.setCursor((lcd.width() - (int16_t)strlen(text) * 12) / 2, y + (h - 14) / 2);
   lcd.print(text);
 }
@@ -145,7 +145,7 @@ static void showMessage(const char* text) {
 static void showPacket(const char* text, float rssi, float snr) {
   lcd.fillRect(0, PACKET_Y, lcd.width(), MESSAGE_Y - PACKET_Y, BG_COLOR);
   lcd.setTextSize(2);
-  lcd.setTextColor(PACKET_TEXT);
+  lcd.setTextColor(PACKET_TEXT, BG_COLOR);
   int16_t y = PACKET_Y + 4;
   size_t len = strlen(text);
   for (size_t i = 0; i < len && y < MESSAGE_Y - 40; i += TEXT_CHARS, y += 22) {
@@ -281,6 +281,8 @@ static void runButton(uint8_t b) {
     showMessage("Busy transmitting");
     return;
   }
+  bool wasChecked[NUM_BUTTONS];
+  for (uint8_t i = 0; i < NUM_BUTTONS; i++) wasChecked[i] = isChecked(i);
   switch (b) {
     case PING: sendPing(); return;
     case BW6:  bwHz = 62500; break;
@@ -292,7 +294,8 @@ static void runButton(uint8_t b) {
     case TX10: txPower = 10; break;
     case TX17: txPower = 17; break;
   }
-  for (uint8_t i = 0; i < NUM_BUTTONS; i++) drawButton(i, false);
+  for (uint8_t i = 0; i < NUM_BUTTONS; i++)
+    if (isChecked(i) != wasChecked[i]) drawButton(i, false);
   applySettings();
 }
 
@@ -300,10 +303,10 @@ static void runButton(uint8_t b) {
 static void pollTouch() {
   static int8_t pressed = -1;
   static bool wasTouched = false;
-  int16_t x, y;
-  bool touched = touch.getPoint(x, y);
+  TouchPoint p;
+  bool touched = touch.getPoints(&p, 1) > 0;
   if (touched) {
-    int8_t b = buttonAt(x, y);
+    int8_t b = buttonAt(p.x, p.y);
     if (b != pressed) {
       if (pressed >= 0) drawButton(pressed, false);
       if (b >= 0) drawButton(b, true);
