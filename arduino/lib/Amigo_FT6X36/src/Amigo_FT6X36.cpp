@@ -51,31 +51,29 @@ uint8_t Amigo_FT6X36::touched(void)
     return n > FT6X36_MAX_POINTS ? 0 : n;
 }
 
-// The touch panel reports in the LCD's physical (row, col) space, except that
-// its column axis runs the other way (MaixPy's touch.py has invert_y for it).
-// After flipping that, this is the inverse of the ILI9486 MADCTL mapping used
-// for each rotation.
+// Raw panel coordinates map directly to portrait rotation 1, as in MaixPy's
+// LoRa_Tester.py. Rotation 0 was checked on the board, and rotations 2 and 3
+// are rotations 0 and 1 turned by 180 degrees.
 void Amigo_FT6X36::mapPoint(uint16_t col, uint16_t row, int16_t& x, int16_t& y)
 {
     if (col >= FT6X36_PANEL_WIDTH) col = FT6X36_PANEL_WIDTH - 1;
     if (row >= FT6X36_PANEL_HEIGHT) row = FT6X36_PANEL_HEIGHT - 1;
-    col = FT6X36_PANEL_WIDTH - 1 - col;
     switch (_rotation) {
-        case 0:  // MV: landscape
+        case 0:  // landscape
             x = row;
-            y = col;
-            break;
-        case 1:  // MY: portrait
-            x = col;
-            y = FT6X36_PANEL_HEIGHT - 1 - row;
-            break;
-        case 2:  // MV | MX | MY: landscape, flipped
-            x = FT6X36_PANEL_HEIGHT - 1 - row;
             y = FT6X36_PANEL_WIDTH - 1 - col;
             break;
-        default: // MX: portrait, flipped
-            x = FT6X36_PANEL_WIDTH - 1 - col;
+        case 1:  // portrait
+            x = col;
             y = row;
+            break;
+        case 2:  // landscape, upside down
+            x = FT6X36_PANEL_HEIGHT - 1 - row;
+            y = col;
+            break;
+        default: // portrait, upside down
+            x = FT6X36_PANEL_WIDTH - 1 - col;
+            y = FT6X36_PANEL_HEIGHT - 1 - row;
             break;
     }
 }

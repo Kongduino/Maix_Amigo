@@ -32,8 +32,9 @@
 #define CMD_NEG_GAMMA        0xE1
 
 // MADCTL values per rotation: MY 0x80, MX 0x40, MV 0x20, BGR 0x08.
-// 0x28 is what MaixPy uses on the Amigo ("dir": 40 in config.json).
-static const uint8_t madctl[4] = {0x28, 0x88, 0xE8, 0x48};
+// 0x28 is what MaixPy uses on the Amigo ("dir": 40 in config.json). The
+// portrait values were checked on the panel: 0x88/0x48 come out mirrored.
+static const uint8_t madctl[4] = {0x28, 0xC8, 0xE8, 0x08};
 
 static void busCommand(uint8_t cmd)
 {
