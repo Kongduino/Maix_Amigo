@@ -31,10 +31,12 @@
 #define CMD_POS_GAMMA        0xE0
 #define CMD_NEG_GAMMA        0xE1
 
-// MADCTL values per rotation: MY 0x80, MX 0x40, MV 0x20, BGR 0x08.
-// 0x28 is what MaixPy uses on the Amigo ("dir": 40 in config.json). The
-// portrait values were checked on the panel: 0x88/0x48 come out mirrored.
-static const uint8_t madctl[4] = {0x28, 0xC8, 0xE8, 0x08};
+// MADCTL values per rotation, checked on the panel. MX/MY (0x40/0x80) have no
+// effect on it; it flips with the ILI9481-style bits instead: horizontal flip
+// 0x02, vertical flip 0x01. MV 0x20 swaps rows and columns, BGR 0x08.
+//   0: landscape, camera on the left    2: landscape, camera on the right
+//   1: portrait, camera at the top      3: portrait, upside down
+static const uint8_t madctl[4] = {0x28, 0x0A, 0x2B, 0x09};
 
 static void busCommand(uint8_t cmd)
 {

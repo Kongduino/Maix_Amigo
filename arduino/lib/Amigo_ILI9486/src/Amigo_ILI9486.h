@@ -45,7 +45,8 @@ class Amigo_ILI9486 : public Adafruit_GFX {
 public:
     Amigo_ILI9486(void);
 
-    // Rotation 0 is landscape (480x320), the same orientation MaixPy uses.
+    // Rotation 0 is landscape (480x320) with the camera on the left, 1 is
+    // portrait with the camera at the top, 2 and 3 are those turned by 180.
     boolean begin(uint32_t freq = 15000000, uint16_t color = COLOR_BLACK);
 
     virtual void drawPixel(int16_t x, int16_t y, uint16_t color);
@@ -66,10 +67,12 @@ public:
     // Draws a w*h RGB565 image, no clipping: it must fit on screen.
     void drawImage(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t* img);
 
-private:
+    // Raw controller access, like MaixPy's lcd.register()
+    void writeCommand(uint8_t cmd, const uint8_t* data = nullptr, uint8_t len = 0);
+
+protected:
     void initSequence(void);
     void setArea(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2);
-    void writeCommand(uint8_t cmd, const uint8_t* data = nullptr, uint8_t len = 0);
 };
 
 #endif
