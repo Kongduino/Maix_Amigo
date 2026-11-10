@@ -1,7 +1,8 @@
 #ifndef _AMIGO_ILI9486_H
 #define _AMIGO_ILI9486_H
 
-// Adafruit_GFX driver for the Maix Amigo's 3.5" 480x320 ILI9486 panel.
+// Adafruit_GFX driver for the Maix Amigo's 3.5" 480x320 IPS panel (an
+// ILI9481-type controller, set up as MaixPy's "amigo_ips" config does).
 // The panel sits on the K210's 8-bit parallel LCD bus (SPI0 in octal mode).
 
 #include <Arduino.h>
@@ -49,6 +50,12 @@ public:
     // portrait with the camera at the top, 2 and 3 are those turned by 180.
     boolean begin(uint32_t freq = 15000000, uint16_t color = COLOR_BLACK);
 
+    // Drawing goes to a framebuffer, and the changed rows are sent at the end
+    // of each call, or at endWrite() for drawing between startWrite() and
+    // endWrite().
+    virtual void startWrite(void);
+    virtual void endWrite(void);
+
     virtual void drawPixel(int16_t x, int16_t y, uint16_t color);
     virtual void writePixel(int16_t x, int16_t y, uint16_t color);
     virtual void writeFillRect(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color);
@@ -64,20 +71,29 @@ public:
     virtual void setRotation(uint8_t r);
     virtual void invertDisplay(boolean invert);
 
-    // Draws a w*h RGB565 image, no clipping: it must fit on screen.
+    // Draws a w*h RGB565 image (clipped to the screen)
     void drawImage(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t* img);
 
     // Text with a background color (setTextColor(fg, bg)) in the built-in
-    // font is sent one character at a time instead of one dot at a time.
+    // font is drawn a character cell at a time instead of one dot at a time.
     using Adafruit_GFX::write;
     virtual size_t write(uint8_t c);
+    virtual size_t write(const uint8_t* buffer, size_t size);
+
+    // LCD bus clock, like MaixPy's lcd.freq(). Returns the actual frequency.
+    uint32_t setFrequency(uint32_t freq);
 
     // Raw controller access, like MaixPy's lcd.register()
     void writeCommand(uint8_t cmd, const uint8_t* data = nullptr, uint8_t len = 0);
 
 protected:
     void initSequence(void);
-    void setArea(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2);
+    void toPanel(int16_t x, int16_t y, uint16_t& px, uint16_t& py);
+    void markDirty(uint16_t py1, uint16_t py2);
+    void flush(void);
+
+    uint16_t _dirtyMin, _dirtyMax;  // changed panel rows
+    uint8_t _writeDepth;
 };
 
 #endif
