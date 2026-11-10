@@ -2,14 +2,15 @@
 // (MaixPy + sx127x.py) to RadioLib. Same radio defaults and the same touch
 // menu: ping, bandwidth, spreading factor, frequency, TX power.
 // Incoming packets are shown with their RSSI and SNR. With an SD card in the
-// TF slot, every event is also appended to LORALOG.CSV, which the Log button
-// shows.
+// TF slot, every event is also appended to a CSV log, which the Log button
+// shows, with the position from a GPS on the Grove port when it has a fix.
 #include <Arduino.h>
 #include <SPI.h>
 #include <RadioLib.h>
 #include <Amigo_ILI9486.h>
 #include <Amigo_FT6X36.h>
 #include <Amigo_SD.h>
+#include <Amigo_GPS.h>
 
 // SP-LoRa plugged straight into the left SP-MOD socket. MISO lands on IO31,
 // which is also the BACK key: pressing it during a transfer corrupts it.
@@ -26,7 +27,8 @@
 #define LORA_SYNC_WORD 0x12
 #define LORA_PREAMBLE  8
 
-#define LOG_FILE "LORALOG.CSV"
+#define LOG_HEADER "ms,event,freq_mhz,bw_khz,sf,tx_dbm,rssi,snr,lat,lng,payload"
+#define GPS_MAX_AGE 10000  // ms: an older position isn't logged
 
 // Portrait, like LoRa_Tester.py. Use 3 if the screen is upside down.
 #define SCREEN_ROTATION 1
@@ -39,6 +41,7 @@ SX1276 radio = new Module(LORA_CS, RADIOLIB_NC, LORA_RST, RADIOLIB_NC, loraSPI,
                           SPISettings(LORA_SPI_FREQ, SPI_MSBFIRST, SPI_MODE0));
 Amigo_ILI9486 lcd;
 Amigo_FT6X36 touch;
+Amigo_GPS gps;
 
 // Current settings, defaults as in LoRa_Tester.py
 static uint32_t freqKHz = 433000;
@@ -234,11 +237,41 @@ static void drawScreen() {
 }
 
 // ---- SD log ----
-// One CSV line per event:
-//   ms,event,freq_mhz,bw_khz,sf,tx_dbm,rssi,snr,payload
-// rssi and snr only for received packets. Times are since boot (no clock).
-// The file is opened and closed for each line, so a power cut loses at most
-// the line being written.
+// One CSV line per event, with the columns of LOG_HEADER. rssi and snr only
+// for received packets, lat and lng only with a recent GPS fix. Times are
+// since boot (no clock). The file is opened and closed for each line, so a
+// power cut loses at most the line being written.
+
+static char logFile[13] = "LORALOG.CSV";
+
+static void readLine(File& f, char* buf, size_t len) {
+  size_t i = 0;
+  int c;
+  while ((c = f.read()) >= 0 && c != '\n')
+    if (i + 1 < len) buf[i++] = c;
+  buf[i] = 0;
+}
+
+// A log written with other columns is left alone: entries go to the first of
+// LORALOG.CSV, LORALOG1.CSV ... LORALOG9.CSV that is new or has these columns.
+// SPI1 must be routed to the card.
+static bool chooseLogFile() {
+  for (uint8_t i = 0; i < 10; i++) {
+    if (i) snprintf(logFile, sizeof(logFile), "LORALOG%u.CSV", i);
+    File f = SD.open(logFile);
+    if (!f) return true;
+    char header[96];
+    readLine(f, header, sizeof(header));
+    bool empty = f.size() == 0;
+    f.close();
+    if (empty || !strcmp(header, LOG_HEADER)) return true;
+  }
+  return false;
+}
+
+static bool gpsFix() {
+  return gps.location.isValid() && gps.location.age() < GPS_MAX_AGE;
+}
 
 static void writeCsvField(File& f, const char* text) {
   f.write('"');
@@ -254,14 +287,18 @@ static void logEvent(const char* event, const char* payload = "", const float* r
   if (!sdReady) return;
   // The SD card and the radio share SPI1: route it to the card, then back
   amigoSdSelect();
-  File f = SD.open(LOG_FILE, FILE_WRITE);
+  File f = SD.open(logFile, FILE_WRITE);
   if (f) {
-    if (f.size() == 0) f.print("ms,event,freq_mhz,bw_khz,sf,tx_dbm,rssi,snr,payload\n");
-    char bw[16], r[16] = "", n[16] = "";
+    if (f.size() == 0) f.print(LOG_HEADER "\n");
+    char bw[16], r[16] = "", n[16] = "", lat[16] = "", lng[16] = "";
     if (rssi) fmt1(*rssi, r, sizeof(r));
     if (snr) fmt1(*snr, n, sizeof(n));
-    f.printf("%u,%s,%u.%03u,%s,%u,%d,%s,%s,", (unsigned)millis(), event, (unsigned)(freqKHz / 1000),
-             (unsigned)(freqKHz % 1000), fmt1(bwHz / 1000.0f, bw, sizeof(bw)), sf, txPower, r, n);
+    if (gpsFix()) {
+      gpsFormat(gps.location.lat(), 6, lat, sizeof(lat));
+      gpsFormat(gps.location.lng(), 6, lng, sizeof(lng));
+    }
+    f.printf("%u,%s,%u.%03u,%s,%u,%d,%s,%s,%s,%s,", (unsigned)millis(), event, (unsigned)(freqKHz / 1000),
+             (unsigned)(freqKHz % 1000), fmt1(bwHz / 1000.0f, bw, sizeof(bw)), sf, txPower, r, n, lat, lng);
     writeCsvField(f, payload);
     f.write('\n');
     f.close();
@@ -282,7 +319,7 @@ static uint32_t  viewTop = 0;         // first entry on screen
 static void indexLog() {
   logCount = 0;
   amigoSdSelect();
-  File f = SD.open(LOG_FILE);
+  File f = SD.open(logFile);
   if (f) {
     uint32_t size = f.size(), pos = 0;
     uint8_t buf[512];
@@ -306,31 +343,25 @@ static void indexLog() {
   loraSPI.begin();
 }
 
-static void readLine(File& f, char* buf, size_t len) {
-  size_t i = 0;
-  int c;
-  while ((c = f.read()) >= 0 && c != '\n')
-    if (i + 1 < len) buf[i++] = c;
-  buf[i] = 0;
-}
+// One log line (LOG_HEADER's columns) as one screen line, the position last
+// when there is one. Returns the color for its event.
+enum { F_MS, F_EVENT, F_FREQ, F_BW, F_SF, F_DBM, F_RSSI, F_SNR, F_LAT, F_LNG, F_PAYLOAD, NUM_FIELDS };
 
-// One log line ("ms,event,freq_mhz,bw_khz,sf,tx_dbm,rssi,snr,payload") as
-// one screen line. Returns the color for its event.
 static uint16_t formatEntry(char* line, char* out, size_t len) {
-  char* field[9];
+  char* field[NUM_FIELDS];
   uint8_t n = 0;
   field[n++] = line;
-  for (char* p = line; *p && n < 9; p++)
+  for (char* p = line; *p && n < NUM_FIELDS; p++)
     if (*p == ',') {
       *p = 0;
       field[n++] = p + 1;
     }
-  if (n < 9) {
+  if (n < NUM_FIELDS) {
     snprintf(out, len, "?");
     return COLOR_YELLOW;
   }
   // Unquote the payload ("" stands for ")
-  char *src = field[8], *dst = field[8];
+  char *src = field[F_PAYLOAD], *dst = field[F_PAYLOAD];
   if (*src == '"') {
     for (src++; *src; ) {
       if (*src == '"' && src[1] != '"') break;
@@ -339,24 +370,28 @@ static uint16_t formatEntry(char* line, char* out, size_t len) {
     }
     *dst = 0;
   }
-  uint32_t ms = strtoul(field[0], nullptr, 10);
+  uint32_t ms = strtoul(field[F_MS], nullptr, 10);
   char t[16];
   snprintf(t, sizeof(t), "%u.%u", (unsigned)(ms / 1000), (unsigned)(ms % 1000 / 100));
-  const char* event = field[1];
+  const char* event = field[F_EVENT];
+  uint16_t color = PACKET_TEXT;
   if (!strcmp(event, "rx")) {
-    snprintf(out, len, "%7s %-10s %s/%s %s", t, event, field[6], field[7], field[8]);
-    return COLOR_WHITE;
+    snprintf(out, len, "%7s %-10s %s/%s %s", t, event, field[F_RSSI], field[F_SNR], field[F_PAYLOAD]);
+    color = COLOR_WHITE;
+  } else if (!strcmp(event, "crc_error")) {
+    snprintf(out, len, "%7s %-10s %s/%s", t, event, field[F_RSSI], field[F_SNR]);
+    color = COLOR_YELLOW;
+  } else if (!strcmp(event, "tx") || !strcmp(event, "tx_timeout")) {
+    snprintf(out, len, "%7s %-10s %s", t, event, field[F_PAYLOAD]);
+    if (strcmp(event, "tx")) color = COLOR_YELLOW;
+  } else {
+    snprintf(out, len, "%7s %-10s %sMHz BW%s SF%s %sdBm", t, event, field[F_FREQ], field[F_BW], field[F_SF],
+             field[F_DBM]);
   }
-  if (!strcmp(event, "crc_error")) {
-    snprintf(out, len, "%7s %-10s %s/%s", t, event, field[6], field[7]);
-    return COLOR_YELLOW;
-  }
-  if (!strcmp(event, "tx") || !strcmp(event, "tx_timeout")) {
-    snprintf(out, len, "%7s %-10s %s", t, event, field[8]);
-    return strcmp(event, "tx") ? COLOR_YELLOW : PACKET_TEXT;
-  }
-  snprintf(out, len, "%7s %-10s %sMHz BW%s SF%s %sdBm", t, event, field[2], field[3], field[4], field[5]);
-  return PACKET_TEXT;
+  size_t used = strlen(out);
+  if (*field[F_LAT] && used < len - 1)
+    snprintf(out + used, len - used, " @%s,%s", field[F_LAT], field[F_LNG]);
+  return color;
 }
 
 static void drawLogPage() {
@@ -371,7 +406,7 @@ static void drawLogPage() {
   if (!logCount) return;
 
   amigoSdSelect();
-  File f = SD.open(LOG_FILE);
+  File f = SD.open(logFile);
   if (f) {
     lcd.startWrite();  // the whole page in one transfer
     lcd.setTextSize(1);
@@ -571,6 +606,19 @@ static void runButton(uint8_t b) {
   applySettings();
 }
 
+// Feeds the GPS and reports changes on the status line. "No data" only shows
+// if a GPS was seen, then lost: without one, the tester just logs no position.
+static void pollGps() {
+  enum { NO_DATA, SEARCHING, FIX };
+  static const char* const states[] = {"GPS: no data", "GPS: searching", "GPS: fix"};
+  static uint8_t shown = NO_DATA;
+  gps.update();
+  uint8_t state = gps.silent() ? NO_DATA : gpsFix() ? FIX : SEARCHING;
+  if (state == shown) return;
+  shown = state;
+  showMessage(states[state]);
+}
+
 // Highlights the button under the finger, and runs it on release
 static void pollTouch() {
   static int8_t pressed = -1;
@@ -601,8 +649,12 @@ void setup() {
   touch.setRotation(SCREEN_ROTATION);
   drawScreen();
   // Before the radio: mounting routes SPI1 to the card, initRadio() back
-  sdReady = amigoSdBegin();
-  Serial.println(sdReady ? "SD card mounted, logging to " LOG_FILE : "No SD card, not logging");
+  sdReady = amigoSdBegin() && chooseLogFile();
+  if (sdReady)
+    Serial.printf("SD card mounted, logging to %s\n", logFile);
+  else
+    Serial.println("No SD card (or no free log file name), not logging");
+  gps.begin();
   radioReady = initRadio();
   if (radioReady) showMessage(sdReady ? "Radio ready, logging to SD" : "Radio ready, no SD log");
   logEvent("boot");
@@ -611,5 +663,6 @@ void setup() {
 void loop() {
   pollTouch();
   pollRadio();
+  pollGps();
   delay(10);
 }

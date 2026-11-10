@@ -37,4 +37,8 @@ private:
     uint32_t _lastByteMs;
 };
 
+// v with the given number of decimals, without printf("%f"), which this
+// newlib build may not support
+const char* gpsFormat(double v, uint8_t decimals, char* buf, size_t len);
+
 #endif

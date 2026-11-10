@@ -20,20 +20,6 @@ static const uint16_t DIM_COLOR = rgb(150, 190, 230);
 #define LINE_H     26
 #define LINE_CHARS 26  // characters per line at text size 2
 
-// Fixed-point decimals, without printf("%f"), which this newlib build may
-// not support
-static const char* fmtFixed(double v, uint8_t decimals, char* buf, size_t len) {
-  uint32_t scale = 1;
-  for (uint8_t i = 0; i < decimals; i++) scale *= 10;
-  int64_t t = llround(v * scale);
-  uint64_t a = t < 0 ? -t : t;
-  if (decimals)
-    snprintf(buf, len, "%s%u.%0*u", t < 0 ? "-" : "", (unsigned)(a / scale), decimals, (unsigned)(a % scale));
-  else
-    snprintf(buf, len, "%s%u", t < 0 ? "-" : "", (unsigned)a);
-  return buf;
-}
-
 // One line of the status screen, padded so it overwrites the previous one
 static void drawLine(uint8_t row, uint16_t color, const char* fmt, ...) {
   char text[64];
@@ -64,17 +50,17 @@ static void drawStatus() {
   row++;
 
   bool loc = gps.location.isValid();
-  drawLine(row++, loc ? COLOR_WHITE : DIM_COLOR, "Lat: %s", loc ? fmtFixed(gps.location.lat(), 6, a, sizeof(a)) : "?");
-  drawLine(row++, loc ? COLOR_WHITE : DIM_COLOR, "Lng: %s", loc ? fmtFixed(gps.location.lng(), 6, a, sizeof(a)) : "?");
+  drawLine(row++, loc ? COLOR_WHITE : DIM_COLOR, "Lat: %s", loc ? gpsFormat(gps.location.lat(), 6, a, sizeof(a)) : "?");
+  drawLine(row++, loc ? COLOR_WHITE : DIM_COLOR, "Lng: %s", loc ? gpsFormat(gps.location.lng(), 6, a, sizeof(a)) : "?");
   drawLine(row++, COLOR_WHITE, "Alt: %s m",
-           gps.altitude.isValid() ? fmtFixed(gps.altitude.meters(), 1, a, sizeof(a)) : "?");
+           gps.altitude.isValid() ? gpsFormat(gps.altitude.meters(), 1, a, sizeof(a)) : "?");
   drawLine(row++, COLOR_WHITE, "Satellites: %s",
-           gps.satellites.isValid() ? fmtFixed(gps.satellites.value(), 0, a, sizeof(a)) : "?");
-  drawLine(row++, COLOR_WHITE, "HDOP: %s", gps.hdop.isValid() ? fmtFixed(gps.hdop.hdop(), 1, a, sizeof(a)) : "?");
+           gps.satellites.isValid() ? gpsFormat(gps.satellites.value(), 0, a, sizeof(a)) : "?");
+  drawLine(row++, COLOR_WHITE, "HDOP: %s", gps.hdop.isValid() ? gpsFormat(gps.hdop.hdop(), 1, a, sizeof(a)) : "?");
   drawLine(row++, COLOR_WHITE, "Speed: %s km/h",
-           gps.speed.isValid() ? fmtFixed(gps.speed.kmph(), 1, a, sizeof(a)) : "?");
+           gps.speed.isValid() ? gpsFormat(gps.speed.kmph(), 1, a, sizeof(a)) : "?");
   drawLine(row++, COLOR_WHITE, "Course: %s",
-           gps.course.isValid() ? fmtFixed(gps.course.deg(), 0, a, sizeof(a)) : "?");
+           gps.course.isValid() ? gpsFormat(gps.course.deg(), 0, a, sizeof(a)) : "?");
   row++;
 
   if (gps.date.isValid() && gps.date.year() > 2000)
@@ -107,8 +93,8 @@ void loop() {
   static uint32_t lastDraw = 0;
   if (gps.update() && gps.location.isUpdated()) {
     char a[24], b[24];
-    Serial.printf("Fix: %s, %s, %u satellites\n", fmtFixed(gps.location.lat(), 6, a, sizeof(a)),
-                  fmtFixed(gps.location.lng(), 6, b, sizeof(b)), (unsigned)gps.satellites.value());
+    Serial.printf("Fix: %s, %s, %u satellites\n", gpsFormat(gps.location.lat(), 6, a, sizeof(a)),
+                  gpsFormat(gps.location.lng(), 6, b, sizeof(b)), (unsigned)gps.satellites.value());
   }
   if (millis() - lastDraw >= 1000) {
     lastDraw = millis();
