@@ -2,7 +2,8 @@
 // (MaixPy + sx127x.py) to RadioLib. Same radio defaults and the same touch
 // menu: ping, bandwidth, spreading factor, frequency, TX power.
 // Incoming packets are shown with their RSSI and SNR. With an SD card in the
-// TF slot, every event is also appended to LORALOG.CSV.
+// TF slot, every event is also appended to LORALOG.CSV, which the Log button
+// shows.
 #include <Arduino.h>
 #include <SPI.h>
 #include <RadioLib.h>
@@ -53,8 +54,14 @@ static uint32_t pingCounter = 0;
 static char     txPayload[24];
 
 // ---- Screen layout (320x480 portrait) ----
-enum Button { PING, BW6, BW7, SF10, SF12, F433, F868, TX10, TX17, NUM_BUTTONS };
-static const char* labels[NUM_BUTTONS] = {"ping", "BW6", "BW7", "SF10", "SF12", "433", "868", "Tx10", "Tx17"};
+enum Button {
+  PING, BW6, BW7, SF10, SF12, F433, F868, TX10, TX17,  // main screen, 3x3 grid
+  LOG,                                                 // main screen, below the packet
+  VIEW_BACK, VIEW_OLDER, VIEW_NEWER,                   // log viewer
+  NUM_BUTTONS
+};
+static const char* labels[NUM_BUTTONS] = {"ping", "BW6", "BW7", "SF10", "SF12", "433", "868", "Tx10", "Tx17",
+                                          "Log", "Back", "Older", "Newer"};
 
 #define BTN_W      90
 #define BTN_H      70
@@ -63,7 +70,25 @@ static const char* labels[NUM_BUTTONS] = {"ping", "BW6", "BW7", "SF10", "SF12", 
 #define BTN_GAP    10
 #define PACKET_Y   (BTN_Y0 + 3 * (BTN_H + BTN_GAP))
 #define MESSAGE_Y  445
+#define LOG_BTN_Y  (MESSAGE_Y - 45)
+#define LOG_BTN_H  40
 #define TEXT_CHARS 25   // characters per line at text size 2
+
+// Log viewer: a list at text size 1, buttons along the bottom
+#define VIEW_BTN_Y  430
+#define VIEW_BTN_W  100
+#define VIEW_BTN_H  45
+#define VIEW_LIST_Y 30
+#define VIEW_LINE_H 10
+#define VIEW_LINES  ((VIEW_BTN_Y - 5 - VIEW_LIST_Y) / VIEW_LINE_H)
+#define VIEW_CHARS  53  // characters per line at text size 1
+
+static bool viewing = false;  // the log viewer is on screen
+
+// Last message and packet, to redraw the main screen after the viewer
+static char  lastMessage[48] = "";
+static char  lastPacket[256] = "";
+static float lastRssi, lastSnr;
 
 static uint16_t rgb(uint8_t r, uint8_t g, uint8_t b) {
   return ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
@@ -96,31 +121,50 @@ static bool isChecked(uint8_t b) {
   }
 }
 
-static void buttonRect(uint8_t b, int16_t& x, int16_t& y) {
-  x = BTN_X0 + (b % 3) * (BTN_W + BTN_GAP);
-  y = BTN_Y0 + (b / 3) * (BTN_H + BTN_GAP);
+static void buttonRect(uint8_t b, int16_t& x, int16_t& y, int16_t& w, int16_t& h) {
+  if (b < LOG) {
+    x = BTN_X0 + (b % 3) * (BTN_W + BTN_GAP);
+    y = BTN_Y0 + (b / 3) * (BTN_H + BTN_GAP);
+    w = BTN_W;
+    h = BTN_H;
+  } else if (b == LOG) {
+    x = BTN_X0 + 2 * (BTN_W + BTN_GAP);
+    y = LOG_BTN_Y;
+    w = BTN_W;
+    h = LOG_BTN_H;
+  } else {
+    x = 5 + (b - VIEW_BACK) * (VIEW_BTN_W + 5);
+    y = VIEW_BTN_Y;
+    w = VIEW_BTN_W;
+    h = VIEW_BTN_H;
+  }
+}
+
+static bool buttonVisible(uint8_t b) {
+  return viewing ? b >= VIEW_BACK : b <= LOG;
 }
 
 static int8_t buttonAt(int16_t px, int16_t py) {
   for (uint8_t b = 0; b < NUM_BUTTONS; b++) {
-    int16_t x, y;
-    buttonRect(b, x, y);
-    if (px >= x && px < x + BTN_W && py >= y && py < y + BTN_H) return b;
+    if (!buttonVisible(b)) continue;
+    int16_t x, y, w, h;
+    buttonRect(b, x, y, w, h);
+    if (px >= x && px < x + w && py >= y && py < y + h) return b;
   }
   return -1;
 }
 
 static void drawButton(uint8_t b, bool pressed) {
-  int16_t x, y;
-  buttonRect(b, x, y);
-  lcd.fillRect(x, y, BTN_W, BTN_H, pressed ? PRESSED_COLOR : BG_COLOR);
-  for (uint8_t i = 0; i < 3; i++) lcd.drawRect(x + i, y + i, BTN_W - 2 * i, BTN_H - 2 * i, COLOR_BLACK);
+  int16_t x, y, w, h;
+  buttonRect(b, x, y, w, h);
+  lcd.fillRect(x, y, w, h, pressed ? PRESSED_COLOR : BG_COLOR);
+  for (uint8_t i = 0; i < 3; i++) lcd.drawRect(x + i, y + i, w - 2 * i, h - 2 * i, COLOR_BLACK);
   if (isChecked(b))
-    for (uint8_t i = 3; i < 6; i++) lcd.drawRect(x + i, y + i, BTN_W - 2 * i, BTN_H - 2 * i, CHECK_COLOR);
+    for (uint8_t i = 3; i < 6; i++) lcd.drawRect(x + i, y + i, w - 2 * i, h - 2 * i, CHECK_COLOR);
   int16_t len = strlen(labels[b]);
   lcd.setTextSize(3);
   lcd.setTextColor(pressed ? PRESSED_TEXT : COLOR_WHITE, pressed ? PRESSED_COLOR : BG_COLOR);
-  lcd.setCursor(x + (BTN_W - len * 18 + 3) / 2, y + (BTN_H - 21) / 2);
+  lcd.setCursor(x + (w - len * 18 + 3) / 2, y + (h - 21) / 2);
   lcd.print(labels[b]);
 }
 
@@ -142,34 +186,51 @@ static void drawSettings() {
   drawCentered(0, BTN_Y0 - 5, line, COLOR_WHITE);
 }
 
-static void showMessage(const char* text) {
-  Serial.println(text);
-  drawCentered(MESSAGE_Y, lcd.height() - MESSAGE_Y, text, COLOR_BLACK);
+static void drawMessage() {
+  drawCentered(MESSAGE_Y, lcd.height() - MESSAGE_Y, lastMessage, COLOR_BLACK);
 }
 
-static void showPacket(const char* text, float rssi, float snr) {
-  lcd.fillRect(0, PACKET_Y, lcd.width(), MESSAGE_Y - PACKET_Y, BG_COLOR);
+// Messages and packets that arrive while the log viewer is open are drawn
+// when it closes
+static void showMessage(const char* text) {
+  Serial.println(text);
+  strncpy(lastMessage, text, sizeof(lastMessage) - 1);
+  if (!viewing) drawMessage();
+}
+
+static void drawPacket() {
+  lcd.fillRect(0, PACKET_Y, lcd.width(), LOG_BTN_Y - 4 - PACKET_Y, BG_COLOR);
+  if (!lastPacket[0]) return;
   lcd.setTextSize(2);
   lcd.setTextColor(PACKET_TEXT, BG_COLOR);
   int16_t y = PACKET_Y + 4;
-  size_t len = strlen(text);
-  for (size_t i = 0; i < len && y < MESSAGE_Y - 40; i += TEXT_CHARS, y += 22) {
+  size_t len = strlen(lastPacket);
+  for (size_t i = 0; i < len && y < LOG_BTN_Y - 4 - 44; i += TEXT_CHARS, y += 22) {
     char line[TEXT_CHARS + 1];
-    strncpy(line, text + i, TEXT_CHARS);
+    strncpy(line, lastPacket + i, TEXT_CHARS);
     line[TEXT_CHARS] = 0;
     lcd.setCursor(6, y);
     lcd.print(line);
   }
   char line[48], r[16], s[16];
-  snprintf(line, sizeof(line), "RSSI: %s SNR: %s", fmt1(rssi, r, sizeof(r)), fmt1(snr, s, sizeof(s)));
+  snprintf(line, sizeof(line), "RSSI: %s SNR: %s", fmt1(lastRssi, r, sizeof(r)), fmt1(lastSnr, s, sizeof(s)));
   lcd.setCursor(6, y);
   lcd.print(line);
+}
+
+static void showPacket(const char* text, float rssi, float snr) {
+  strncpy(lastPacket, text, sizeof(lastPacket) - 1);
+  lastRssi = rssi;
+  lastSnr = snr;
+  if (!viewing) drawPacket();
 }
 
 static void drawScreen() {
   lcd.fillScreen(BG_COLOR);
   drawSettings();
-  for (uint8_t b = 0; b < NUM_BUTTONS; b++) drawButton(b, false);
+  for (uint8_t b = 0; b <= LOG; b++) drawButton(b, false);
+  drawPacket();
+  drawMessage();
 }
 
 // ---- SD log ----
@@ -209,6 +270,162 @@ static void logEvent(const char* event, const char* payload = "", const float* r
   }
   loraSPI.begin();
   if (!sdReady) showMessage("SD log failed, stopped");
+}
+
+// ---- Log viewer ----
+static uint32_t* logLines = nullptr;  // file offset of each entry
+static uint32_t  logCount = 0, logCapacity = 0;
+static uint32_t  viewTop = 0;         // first entry on screen
+
+// Records where each entry starts. Every line but the header follows a
+// newline.
+static void indexLog() {
+  logCount = 0;
+  amigoSdSelect();
+  File f = SD.open(LOG_FILE);
+  if (f) {
+    uint32_t size = f.size(), pos = 0;
+    uint8_t buf[512];
+    int n;
+    while ((n = f.read(buf, (uint16_t)sizeof(buf))) > 0) {
+      for (int i = 0; i < n; i++) {
+        if (buf[i] != '\n' || pos + i + 1 >= size) continue;
+        if (logCount == logCapacity) {
+          uint32_t capacity = logCapacity ? 2 * logCapacity : 1024;
+          uint32_t* grown = (uint32_t*)realloc(logLines, capacity * sizeof(uint32_t));
+          if (!grown) break;
+          logLines = grown;
+          logCapacity = capacity;
+        }
+        logLines[logCount++] = pos + i + 1;
+      }
+      pos += n;
+    }
+    f.close();
+  }
+  loraSPI.begin();
+}
+
+static void readLine(File& f, char* buf, size_t len) {
+  size_t i = 0;
+  int c;
+  while ((c = f.read()) >= 0 && c != '\n')
+    if (i + 1 < len) buf[i++] = c;
+  buf[i] = 0;
+}
+
+// One log line ("ms,event,freq_mhz,bw_khz,sf,tx_dbm,rssi,snr,payload") as
+// one screen line. Returns the color for its event.
+static uint16_t formatEntry(char* line, char* out, size_t len) {
+  char* field[9];
+  uint8_t n = 0;
+  field[n++] = line;
+  for (char* p = line; *p && n < 9; p++)
+    if (*p == ',') {
+      *p = 0;
+      field[n++] = p + 1;
+    }
+  if (n < 9) {
+    snprintf(out, len, "?");
+    return COLOR_YELLOW;
+  }
+  // Unquote the payload ("" stands for ")
+  char *src = field[8], *dst = field[8];
+  if (*src == '"') {
+    for (src++; *src; ) {
+      if (*src == '"' && src[1] != '"') break;
+      if (*src == '"') src++;
+      *dst++ = *src++;
+    }
+    *dst = 0;
+  }
+  uint32_t ms = strtoul(field[0], nullptr, 10);
+  char t[16];
+  snprintf(t, sizeof(t), "%u.%u", (unsigned)(ms / 1000), (unsigned)(ms % 1000 / 100));
+  const char* event = field[1];
+  if (!strcmp(event, "rx")) {
+    snprintf(out, len, "%7s %-10s %s/%s %s", t, event, field[6], field[7], field[8]);
+    return COLOR_WHITE;
+  }
+  if (!strcmp(event, "crc_error")) {
+    snprintf(out, len, "%7s %-10s %s/%s", t, event, field[6], field[7]);
+    return COLOR_YELLOW;
+  }
+  if (!strcmp(event, "tx") || !strcmp(event, "tx_timeout")) {
+    snprintf(out, len, "%7s %-10s %s", t, event, field[8]);
+    return strcmp(event, "tx") ? COLOR_YELLOW : PACKET_TEXT;
+  }
+  snprintf(out, len, "%7s %-10s %sMHz BW%s SF%s %sdBm", t, event, field[2], field[3], field[4], field[5]);
+  return PACKET_TEXT;
+}
+
+static void drawLogPage() {
+  char header[48];
+  if (logCount)
+    snprintf(header, sizeof(header), "Log %u-%u of %u", (unsigned)viewTop + 1,
+             (unsigned)min(viewTop + VIEW_LINES, logCount), (unsigned)logCount);
+  else
+    snprintf(header, sizeof(header), "Log is empty");
+  drawCentered(0, VIEW_LIST_Y - 5, header, COLOR_WHITE);
+  lcd.fillRect(0, VIEW_LIST_Y, lcd.width(), VIEW_LINES * VIEW_LINE_H, BG_COLOR);
+  if (!logCount) return;
+
+  amigoSdSelect();
+  File f = SD.open(LOG_FILE);
+  if (f) {
+    lcd.startWrite();  // the whole page in one transfer
+    lcd.setTextSize(1);
+    for (uint32_t i = viewTop; i < logCount && i < viewTop + VIEW_LINES; i++) {
+      char line[300], out[VIEW_CHARS + 1];
+      f.seek(logLines[i]);
+      readLine(f, line, sizeof(line));
+      uint16_t color = formatEntry(line, out, sizeof(out));
+      lcd.setTextColor(color, BG_COLOR);
+      lcd.setCursor(2, VIEW_LIST_Y + (i - viewTop) * VIEW_LINE_H);
+      lcd.print(out);
+    }
+    lcd.endWrite();
+    f.close();
+  }
+  loraSPI.begin();
+}
+
+static void showLogEnd() {
+  indexLog();
+  viewTop = logCount > VIEW_LINES ? logCount - VIEW_LINES : 0;
+  drawLogPage();
+}
+
+static void openViewer() {
+  if (!sdReady) {
+    showMessage("No SD card");
+    return;
+  }
+  viewing = true;
+  lcd.fillScreen(BG_COLOR);
+  for (uint8_t b = VIEW_BACK; b < NUM_BUTTONS; b++) drawButton(b, false);
+  showLogEnd();
+}
+
+static void closeViewer() {
+  viewing = false;
+  drawScreen();
+}
+
+static void pageOlder() {
+  if (viewTop == 0) return;
+  viewTop = viewTop > VIEW_LINES ? viewTop - VIEW_LINES : 0;
+  drawLogPage();
+}
+
+// On the last page, picks up the entries logged since
+static void pageNewer() {
+  if (viewTop + VIEW_LINES >= logCount) {
+    showLogEnd();
+    return;
+  }
+  viewTop = min(viewTop + VIEW_LINES, logCount - VIEW_LINES);
+  drawLogPage();
 }
 
 // ---- Radio ----
@@ -325,6 +542,12 @@ static void pollRadio() {
 }
 
 static void runButton(uint8_t b) {
+  switch (b) {
+    case LOG:        openViewer(); return;
+    case VIEW_BACK:  closeViewer(); return;
+    case VIEW_OLDER: pageOlder(); return;
+    case VIEW_NEWER: pageNewer(); return;
+  }
   if (transmitting) {
     showMessage("Busy transmitting");
     return;
@@ -341,6 +564,7 @@ static void runButton(uint8_t b) {
     case F868: freqKHz = 868000; break;
     case TX10: txPower = 10; break;
     case TX17: txPower = 17; break;
+    default:   return;
   }
   for (uint8_t i = 0; i < NUM_BUTTONS; i++)
     if (isChecked(i) != wasChecked[i]) drawButton(i, false);
