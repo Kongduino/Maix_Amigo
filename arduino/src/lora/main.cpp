@@ -60,11 +60,11 @@ static char     txPayload[24];
 enum Button {
   PING, BW6, BW7, SF10, SF12, F433, F868, TX10, TX17,  // main screen, 3x3 grid
   LOG,                                                 // main screen, below the packet
-  VIEW_BACK, VIEW_OLDER, VIEW_NEWER,                   // log viewer
+  VIEW_BACK, VIEW_OLDER, VIEW_NEWER, VIEW_DUMP,        // log viewer
   NUM_BUTTONS
 };
 static const char* labels[NUM_BUTTONS] = {"ping", "BW6", "BW7", "SF10", "SF12", "433", "868", "Tx10", "Tx17",
-                                          "Log", "Back", "Older", "Newer"};
+                                          "Log", "Back", "Older", "Newer", "Dump"};
 
 #define BTN_W      90
 #define BTN_H      70
@@ -77,9 +77,10 @@ static const char* labels[NUM_BUTTONS] = {"ping", "BW6", "BW7", "SF10", "SF12", 
 #define LOG_BTN_H  40
 #define TEXT_CHARS 25   // characters per line at text size 2
 
-// Log viewer: a list at text size 1, buttons along the bottom
+// Log viewer: a list at text size 1, buttons (text size 2) along the bottom
 #define VIEW_BTN_Y  430
-#define VIEW_BTN_W  100
+#define VIEW_BTN_W  75
+#define VIEW_BTN_GAP 4
 #define VIEW_BTN_H  45
 #define VIEW_LIST_Y 30
 #define VIEW_LINE_H 10
@@ -136,7 +137,7 @@ static void buttonRect(uint8_t b, int16_t& x, int16_t& y, int16_t& w, int16_t& h
     w = BTN_W;
     h = LOG_BTN_H;
   } else {
-    x = 5 + (b - VIEW_BACK) * (VIEW_BTN_W + 5);
+    x = VIEW_BTN_GAP + (b - VIEW_BACK) * (VIEW_BTN_W + VIEW_BTN_GAP);
     y = VIEW_BTN_Y;
     w = VIEW_BTN_W;
     h = VIEW_BTN_H;
@@ -165,9 +166,10 @@ static void drawButton(uint8_t b, bool pressed) {
   if (isChecked(b))
     for (uint8_t i = 3; i < 6; i++) lcd.drawRect(x + i, y + i, w - 2 * i, h - 2 * i, CHECK_COLOR);
   int16_t len = strlen(labels[b]);
-  lcd.setTextSize(3);
+  uint8_t size = b >= VIEW_BACK ? 2 : 3;
+  lcd.setTextSize(size);
   lcd.setTextColor(pressed ? PRESSED_TEXT : COLOR_WHITE, pressed ? PRESSED_COLOR : BG_COLOR);
-  lcd.setCursor(x + (w - len * 18 + 3) / 2, y + (h - 21) / 2);
+  lcd.setCursor(x + (w - len * 6 * size + size) / 2, y + (h - 7 * size) / 2);
   lcd.print(labels[b]);
 }
 
@@ -463,6 +465,26 @@ static void pageNewer() {
   drawLogPage();
 }
 
+// Writes the whole log file to Serial as it is, between two marker lines.
+// The radio isn't polled meanwhile (about 11 KB/s at 115200 baud).
+static void dumpLog() {
+  drawCentered(0, VIEW_LIST_Y - 5, "Dumping to Serial...", COLOR_WHITE);
+  amigoSdSelect();
+  File f = SD.open(logFile);
+  if (f) {
+    Serial.printf("----- %s, %u bytes -----\n", logFile, (unsigned)f.size());
+    uint8_t buf[512];
+    int n;
+    while ((n = f.read(buf, (uint16_t)sizeof(buf))) > 0) Serial.write(buf, n);
+    Serial.printf("----- end of %s -----\n", logFile);
+    f.close();
+  } else {
+    Serial.printf("Can't open %s\n", logFile);
+  }
+  loraSPI.begin();
+  drawLogPage();
+}
+
 // ---- Radio ----
 static bool checkRadio(int16_t state, const char* what) {
   if (state == RADIOLIB_ERR_NONE) return true;
@@ -582,6 +604,7 @@ static void runButton(uint8_t b) {
     case VIEW_BACK:  closeViewer(); return;
     case VIEW_OLDER: pageOlder(); return;
     case VIEW_NEWER: pageNewer(); return;
+    case VIEW_DUMP:  dumpLog(); return;
   }
   if (transmitting) {
     showMessage("Busy transmitting");
