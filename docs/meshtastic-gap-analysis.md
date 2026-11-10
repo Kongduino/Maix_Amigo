@@ -3,7 +3,8 @@
 What a Meshtastic firmware port to the Sipeed Maix Amigo (Kendryte K210) needs,
 compared with what this repo's Arduino environment already provides.
 
-Based on meshtastic/firmware at commit d9c9916 (2026-11-10). Effort estimates
+Based on meshtastic/firmware at commit d9c9916 (2026-11-10) and
+meshtastic/device-ui at commit 199c0fe (2026-11-03). Effort estimates
 are rough working days for someone familiar with both code bases.
 
 ## Summary
@@ -32,6 +33,7 @@ no Wi-Fi, no FreeRTOS, and its own LittleFS on internal flash.
 | Bluetooth | Not possible | No BLE hardware: no iOS app, no Android over BLE | - |
 | Wi-Fi | Large | ESP8285 is driven by AT commands; Meshtastic's Wi-Fi/TCP API expects native Wi-Fi | 5+ d, later |
 | Display | Missing | `TFTDisplay` backend adapter over `Amigo_ILI9486` (needs `pushImage`, rotation, on/off) | 2-3 d |
+| MUI (LVGL device UI) | Later | Screen size fits; needs its own thread and a K210 LVGL display/touch driver | 5-10 d, later |
 | Touch | Small | `TouchScreenImpl1` takes a `getTouch(x, y)` function; `Amigo_FT6X36::getPoint` fits | 0.5 d |
 | GPS | Small | K210 branch in `GPS.cpp` for the UART type and `begin(baud, rx, tx)` | 0.5 d |
 | Battery | Small | AXP173 isn't supported (AXP192/AXP2101 only, ESP32 only); custom `HasBatteryLevel` reading the AXP173 | 1 d |
@@ -128,11 +130,38 @@ cache. For the K210 these hooks would call an SPI3 NOR flash driver:
   (LovyanGFX, TFT_eSPI or Arduino_GFX). A K210 backend needs `begin`,
   `setRotation`, `fillScreen`, `pushImage`, `startWrite`/`endWrite` and display
   on/off. `Amigo_ILI9486`'s framebuffer and row flushing fit this.
-- The LVGL "device-ui" is ESP32-oriented; not a first-stage target.
+- The LVGL device UI (MUI) is a separate, later step: see below.
 - Touch: `TouchScreenImpl1(width, height, getTouch)` takes a plain function,
   so `Amigo_FT6X36::getPoint` can drive Meshtastic's touch input.
 - Buttons: KEY1 (IO23) and KEY2 (IO20) are also the Grove/GPS pins; the BACK
   key (IO31) is the LoRa MISO line in this setup.
+
+### MUI (device-ui)
+
+MUI is Meshtastic's LVGL touch UI (meshtastic/device-ui), the alternative to the
+classic screen.
+
+- **Screen size fits.** MUI's main view targets 320x240 and up:
+  `ViewFactory` creates `TFTView_320x240` for any size that isn't one of the
+  small special views (128x64, 160x80, 240x240, 480x222), and it lays itself
+  out to the real resolution. The closest existing board is the Makerfabs
+  Nomad Terminal, a 3.5" 320x480 panel (`TFT_WIDTH 320`, `TFT_HEIGHT 480`)
+  built with `VIEW_320x240`, the same resolution as the Amigo.
+- **Memory fits.** On ESP32, MUI needs PSRAM (the original CYD board no
+  longer works for lack of memory); the K210's 6 MB of SRAM covers it.
+- **It needs a thread.** `tftSetup.cpp` runs MUI's endless loop
+  (`tft_task_handler`) in a FreeRTOS task on ESP32 or a `std::thread` on
+  Linux; a bare K210 build has neither. Options: call MUI's handler from an
+  `OSThread` (changes to how the firmware starts MUI), turn on the FreeRTOS
+  that ships in the Kendryte SDK, or run it on the K210's second core (as
+  MaixPy does), which needs real locks first, since Meshtastic's are no-ops
+  without FreeRTOS.
+- **It needs a display driver.** device-ui's hardware drivers use LovyanGFX,
+  which doesn't support the K210 (the others are a Linux framebuffer and X11).
+  A K210 `DisplayDriver` hands LVGL's flushes to `Amigo_ILI9486`'s framebuffer
+  and reads touch from `Amigo_FT6X36`. LVGL itself is portable C.
+- Estimate: 5-10 days, mostly the threading question, on top of the classic
+  screen. Do it after the node works with the classic UI.
 
 ### GPS, battery
 
@@ -154,7 +183,7 @@ cache. For the K210 these hooks would call an SPI3 NOR flash driver:
    Meshtastic node on the same band.
 4. **Serial client**: CLI and web client over USB.
 5. **Display and touch**, then **GPS**, **battery**, node ID and RNG checks.
-6. Optional later: SD card, Wi-Fi over ESP8285.
+6. Optional later: MUI (the LVGL touch UI), SD card, Wi-Fi over ESP8285.
 
 ## Decisions
 
