@@ -1,12 +1,14 @@
 // LoRa tester for the SP-LoRa (SX1276) module, ported from LoRa_Tester.py
 // (MaixPy + sx127x.py) to RadioLib. Same radio defaults and the same touch
 // menu: ping, bandwidth, spreading factor, frequency, TX power.
-// Incoming packets are shown with their RSSI and SNR.
+// Incoming packets are shown with their RSSI and SNR. With an SD card in the
+// TF slot, every event is also appended to LORALOG.CSV.
 #include <Arduino.h>
 #include <SPI.h>
 #include <RadioLib.h>
 #include <Amigo_ILI9486.h>
 #include <Amigo_FT6X36.h>
+#include <Amigo_SD.h>
 
 // SP-LoRa plugged straight into the left SP-MOD socket. MISO lands on IO31,
 // which is also the BACK key: pressing it during a transfer corrupts it.
@@ -22,6 +24,8 @@
 #define LORA_CR        5      // coding rate 4/5
 #define LORA_SYNC_WORD 0x12
 #define LORA_PREAMBLE  8
+
+#define LOG_FILE "LORALOG.CSV"
 
 // Portrait, like LoRa_Tester.py. Use 3 if the screen is upside down.
 #define SCREEN_ROTATION 1
@@ -42,6 +46,7 @@ static uint8_t  sf = 12;
 static int8_t   txPower = 17;
 
 static bool     radioReady = false;
+static bool     sdReady = false;
 static bool     transmitting = false;
 static uint32_t txStart, txTimeoutMs;
 static uint32_t pingCounter = 0;
@@ -167,6 +172,45 @@ static void drawScreen() {
   for (uint8_t b = 0; b < NUM_BUTTONS; b++) drawButton(b, false);
 }
 
+// ---- SD log ----
+// One CSV line per event:
+//   ms,event,freq_mhz,bw_khz,sf,tx_dbm,rssi,snr,payload
+// rssi and snr only for received packets. Times are since boot (no clock).
+// The file is opened and closed for each line, so a power cut loses at most
+// the line being written.
+
+static void writeCsvField(File& f, const char* text) {
+  f.write('"');
+  for (; *text; text++) {
+    if (*text == '"') f.write('"');
+    f.write(*text);
+  }
+  f.write('"');
+}
+
+static void logEvent(const char* event, const char* payload = "", const float* rssi = nullptr,
+                     const float* snr = nullptr) {
+  if (!sdReady) return;
+  // The SD card and the radio share SPI1: route it to the card, then back
+  amigoSdSelect();
+  File f = SD.open(LOG_FILE, FILE_WRITE);
+  if (f) {
+    if (f.size() == 0) f.print("ms,event,freq_mhz,bw_khz,sf,tx_dbm,rssi,snr,payload\n");
+    char bw[16], r[16] = "", n[16] = "";
+    if (rssi) fmt1(*rssi, r, sizeof(r));
+    if (snr) fmt1(*snr, n, sizeof(n));
+    f.printf("%u,%s,%u.%03u,%s,%u,%d,%s,%s,", (unsigned)millis(), event, (unsigned)(freqKHz / 1000),
+             (unsigned)(freqKHz % 1000), fmt1(bwHz / 1000.0f, bw, sizeof(bw)), sf, txPower, r, n);
+    writeCsvField(f, payload);
+    f.write('\n');
+    f.close();
+  } else {
+    sdReady = false;
+  }
+  loraSPI.begin();
+  if (!sdReady) showMessage("SD log failed, stopped");
+}
+
 // ---- Radio ----
 static bool checkRadio(int16_t state, const char* what) {
   if (state == RADIOLIB_ERR_NONE) return true;
@@ -216,6 +260,7 @@ static void applySettings() {
   if (!checkRadio(radio.setOutputPower(txPower), "setOutputPower")) return;
   startReceive();
   showMessage("Settings applied");
+  logEvent("settings");
 }
 
 static void sendPing() {
@@ -252,6 +297,7 @@ static void pollRadio() {
     transmitting = false;
     showMessage(msg);
     startReceive();
+    logEvent(flags & RADIOLIB_SX127X_CLEAR_IRQ_FLAG_TX_DONE ? "tx" : "tx_timeout", txPayload);
     return;
   }
 
@@ -263,6 +309,7 @@ static void pollRadio() {
     float snr = radio.getSNR();
     if (state == RADIOLIB_ERR_CRC_MISMATCH) {
       showMessage("CRC error");
+      logEvent("crc_error", "", &rssi, &snr);
       return;
     }
     if (!checkRadio(state, "readData")) return;
@@ -273,6 +320,7 @@ static void pollRadio() {
     Serial.printf("*** Received: %s RSSI %s SNR %s\n", (char*)buf, fmt1(rssi, r, sizeof(r)), fmt1(snr, s, sizeof(s)));
     showPacket((char*)buf, rssi, snr);
     showMessage("Incoming!");
+    logEvent("rx", (char*)buf, &rssi, &snr);
   }
 }
 
@@ -328,8 +376,12 @@ void setup() {
   if (!touch.begin()) Serial.println("FT6X36 not found");
   touch.setRotation(SCREEN_ROTATION);
   drawScreen();
+  // Before the radio: mounting routes SPI1 to the card, initRadio() back
+  sdReady = amigoSdBegin();
+  Serial.println(sdReady ? "SD card mounted, logging to " LOG_FILE : "No SD card, not logging");
   radioReady = initRadio();
-  if (radioReady) showMessage("Radio ready");
+  if (radioReady) showMessage(sdReady ? "Radio ready, logging to SD" : "Radio ready, no SD log");
+  logEvent("boot");
 }
 
 void loop() {
