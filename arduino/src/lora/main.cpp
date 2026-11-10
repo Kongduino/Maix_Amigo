@@ -16,9 +16,6 @@
 #define LORA_SCK        9
 #define LORA_MOSI       7
 #define LORA_MISO      31
-// IRQ pin of the SP-LoRa. Also the blue LED. Like sx127x.py, this program
-// polls the IRQ flags register, so it doesn't depend on it.
-#define LORA_DIO0      17
 #define LORA_SPI_FREQ  2000000
 
 // Radio settings from sx127x.py, so both can talk to each other
@@ -30,7 +27,10 @@
 #define SCREEN_ROTATION 1
 
 SPIClass loraSPI(SPI1, LORA_SCK, LORA_MISO, LORA_MOSI, -1, LORA_SPI_FREQ);
-SX1276 radio = new Module(LORA_CS, LORA_DIO0, LORA_RST, RADIOLIB_NC, loraSPI,
+// The SP-MOD LoRa module has no DIO0 line: like sx127x.py, this program
+// polls the IRQ flags register instead. RadioLib only needs the pin for its
+// blocking transmit()/receive()/scanChannel(), which aren't used here.
+SX1276 radio = new Module(LORA_CS, RADIOLIB_NC, LORA_RST, RADIOLIB_NC, loraSPI,
                           SPISettings(LORA_SPI_FREQ, SPI_MSBFIRST, SPI_MODE0));
 Amigo_ILI9486 lcd;
 Amigo_FT6X36 touch;
